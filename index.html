@@ -457,6 +457,20 @@
             from { transform: translateX(-100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
+        
+        .sync-notice {
+            background: #fff8e1;
+            border: 1px solid #ffd54f;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+            text-align: center;
+        }
+        
+        .sync-notice p {
+            margin: 0.5rem 0;
+            color: #ff6f00;
+        }
     </style>
 </head>
 <body>
@@ -519,6 +533,11 @@
                 <button type="submit"><i class="fas fa-hand-holding-heart"></i> سجل تبرعك الآن</button>
             </form>
             
+            <div class="sync-notice">
+                <p><i class="fas fa-info-circle"></i> بعد التسجيل، انسخ الرابط من الأسفل وأرسله للأصدقاء</p>
+                <p>سيظهر تبرعك على جميع الأجهزة عند فتح الرابط</p>
+            </div>
+            
             <div class="thank-you" id="thankYouMessage">
                 <h3><i class="fas fa-check-circle"></i> شكراً لك على تبرعك!</h3>
                 <p>نسأل الله أن يتقبل منك ويجعلها في ميزان حسناتك.</p>
@@ -527,7 +546,7 @@
         
         <div class="card donors-list">
             <h2><i class="fas fa-users"></i> قائمة المتبرعين المباشرة</h2>
-            <p style="color: #4caf50; margin-bottom: 1rem;"><i class="fas fa-sync-alt"></i> يتم تحديث القائمة تلقائياً كل 10 ثوان</p>
+            <p style="color: #4caf50; margin-bottom: 1rem;"><i class="fas fa-sync-alt"></i> يتم تحديث القائمة تلقائياً</p>
             <div id="donorsContainer">
                 <table id="donorsTable">
                     <thead>
@@ -560,6 +579,9 @@
                 <button class="share-button" onclick="simulateDonation()" style="background-color: var(--accent-color);">
                     <i class="fas fa-bolt"></i> محاكاة تبرع (للاختبار)
                 </button>
+                <button class="share-button" onclick="forceSync()" style="background-color: #2196f3;">
+                    <i class="fas fa-sync"></i> تحديث القائمة
+                </button>
             </div>
         </div>
     </div>
@@ -579,7 +601,6 @@
         let donors = [];
         let totalAmount = 0;
         const DONATION_GOAL = 50000;
-        let autoUpdateInterval;
         
         // دالة التهيئة عند تحميل الصفحة
         function init() {
@@ -587,7 +608,6 @@
             checkUrlParams();
             setupAmountButtons();
             setupEventListeners();
-            startAutoUpdate();
             updateGoalProgress();
         }
         
@@ -626,23 +646,42 @@
                     const urlTotal = parseInt(totalParam);
                     const urlDonors = JSON.parse(decodeURIComponent(donorsParam));
                     
+                    let hasNewDonations = false;
+                    
                     // دمج المتبرعين الجدد مع القائمة الحالية
                     urlDonors.forEach(newDonor => {
-                        const exists = donors.some(d => d.name === newDonor.name && d.amount === newDonor.amount && d.message === newDonor.message);
+                        // إنشاء معرف فريد لكل تبرع
+                        const donorId = `${newDonor.name}-${newDonor.amount}-${newDonor.message}-${newDonor.timestamp}`;
+                        const exists = donors.some(d => {
+                            const existingId = `${d.name}-${d.amount}-${d.message}-${d.timestamp}`;
+                            return existingId === donorId;
+                        });
+                        
                         if (!exists) {
                             donors.push(newDonor);
+                            hasNewDonations = true;
+                            
+                            // إضافة إلى قائمة التبرعات الحديثة
+                            addToRecentDonations(newDonor);
                         }
                     });
                     
                     // تحديث الإجمالي
-                    totalAmount = Math.max(totalAmount, urlTotal);
+                    if (urlTotal > totalAmount) {
+                        totalAmount = urlTotal;
+                        hasNewDonations = true;
+                    }
                     
-                    // حفظ البيانات المدمجة
-                    saveData();
-                    
-                    updateTotalAmount();
-                    displayDonors();
-                    updateGoalProgress();
+                    if (hasNewDonations) {
+                        // حفظ البيانات المدمجة
+                        saveData();
+                        
+                        updateTotalAmount();
+                        displayDonors();
+                        updateGoalProgress();
+                        
+                        showNotification('تم تحديث قائمة المتبرعين ببيانات جديدة!');
+                    }
                 } catch (e) {
                     console.error("Error parsing URL parameters:", e);
                     displayEmptyState();
@@ -754,7 +793,7 @@
         function copyLink() {
             const url = updateUrl();
             navigator.clipboard.writeText(url).then(() => {
-                showNotification('تم نسخ الرابط إلى الحافظة!');
+                showNotification('تم نسخ الرابط إلى الحافظة! شاركه الآن مع أصدقائك.');
             });
         }
         
@@ -766,7 +805,7 @@
             
             setTimeout(() => {
                 notification.classList.remove('show');
-            }, 3000);
+            }, 4000);
         }
         
         // مشاركة عبر واتساب
@@ -779,31 +818,6 @@
         function shareOnFacebook() {
             const url = updateUrl();
             window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`, '_blank');
-        }
-        
-        // بدء التحديث التلقائي
-        function startAutoUpdate() {
-            // تحديث كل 10 ثوانٍ للتحقق من التبرعات الجديدة
-            autoUpdateInterval = setInterval(() => {
-                checkForNewDonations();
-            }, 10000);
-        }
-        
-        // التحقق من التبرعات الجديدة (محاكاة للخدمة الخلفية)
-        function checkForNewDonations() {
-            // في تطبيق حقيقي، هنا ستكون استدعاء لخادم للتحقق من التبرعات الجديدة
-            console.log("جارٍ التحقق من التبرعات الجديدة...");
-            
-            // محاكاة - في التطبيق الحقيقي سيتم استبدال هذا باستدعاء API
-            const simulatedDonations = JSON.parse(localStorage.getItem('simulatedDonations') || '[]');
-            
-            if (simulatedDonations.length > 0) {
-                simulatedDonations.forEach(donation => {
-                    addDonation(donation.name, donation.amount, donation.message);
-                });
-                
-                localStorage.removeItem('simulatedDonations');
-            }
         }
         
         // إضافة تبرع جديد
@@ -849,6 +863,9 @@
                 emptyState.remove();
                 document.getElementById('donorsTable').style.display = 'table';
             }
+            
+            // تحديث الرابط بالمعلومات الجديدة
+            updateUrl();
         }
         
         // إضافة إلى قائمة التبرعات الحديثة
@@ -902,6 +919,12 @@
             });
         }
         
+        // إعادة المزامنة يدوياً
+        function forceSync() {
+            checkUrlParams();
+            showNotification('جارٍ تحديث قائمة المتبرعين...');
+        }
+        
         // إعداد مستمعي الأحداث
         function setupEventListeners() {
             // معالجة تقديم النموذج
@@ -923,9 +946,6 @@
                     
                     // إزالة التحديد من أزرار المبلغ
                     document.querySelectorAll('.amount-button').forEach(b => b.classList.remove('selected'));
-                    
-                    // تحديث الرابط ليكون قابلاً للمشاركة
-                    updateUrl();
                     
                     // إخفاء رسالة الشكر بعد 5 ثوان
                     setTimeout(() => {
