@@ -99,6 +99,28 @@
             gap: 0.5rem;
         }
         
+        .connection-status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 0.5rem 1rem;
+            border-radius: 30px;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .connected {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .disconnected {
+            background: #f44336;
+            color: white;
+        }
+        
         @keyframes pulse {
             0% { opacity: 1; }
             50% { opacity: 0.6; }
@@ -331,9 +353,8 @@
                 padding: 1.5rem;
             }
             
-            .live-badge {
+            .live-badge, .connection-status {
                 top: 10px;
-                left: 10px;
                 font-size: 0.8rem;
                 padding: 0.3rem 0.8rem;
             }
@@ -344,6 +365,7 @@
             grid-template-columns: repeat(3, 1fr);
             gap: 0.5rem;
             margin-top: 0.5rem;
+            margin-bottom: 1rem;
         }
         
         .amount-button {
@@ -458,27 +480,33 @@
             to { transform: translateX(0); opacity: 1; }
         }
         
-        .sync-notice {
-            background: #fff8e1;
-            border: 1px solid #ffd54f;
+        .connection-info {
+            background: #e3f2fd;
             border-radius: 8px;
             padding: 1rem;
             margin-top: 1rem;
             text-align: center;
         }
         
-        .sync-notice p {
-            margin: 0.5rem 0;
-            color: #ff6f00;
+        .connection-info p {
+            margin: 0.3rem 0;
+            color: #0d47a1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
         }
     </style>
 </head>
 <body>
-    <div class="notification" id="notification">تم نسخ الرابط إلى الحافظة!</div>
+    <div class="notification" id="notification">تم تسجيل تبرعك بنجاح!</div>
     
     <header>
         <div class="live-badge">
             <i class="fas fa-broadcast-tower"></i> بث مباشر
+        </div>
+        <div class="connection-status connected" id="connectionStatus">
+            <i class="fas fa-wifi"></i> متصل بالخادم
         </div>
         <div class="header-content">
             <h1><i class="fas fa-hands-helping"></i> حملة تبرعات مباشرة</h1>
@@ -533,9 +561,9 @@
                 <button type="submit"><i class="fas fa-hand-holding-heart"></i> سجل تبرعك الآن</button>
             </form>
             
-            <div class="sync-notice">
-                <p><i class="fas fa-info-circle"></i> بعد التسجيل، انسخ الرابط من الأسفل وأرسله للأصدقاء</p>
-                <p>سيظهر تبرعك على جميع الأجهزة عند فتح الرابط</p>
+            <div class="connection-info">
+                <p><i class="fas fa-info-circle"></i> سيظهر تبرعك فوراً على جميع الأجهزة</p>
+                <p><i class="fas fa-users"></i> <span id="connectedUsers">0</span> شخص متصل الآن</p>
             </div>
             
             <div class="thank-you" id="thankYouMessage">
@@ -546,7 +574,7 @@
         
         <div class="card donors-list">
             <h2><i class="fas fa-users"></i> قائمة المتبرعين المباشرة</h2>
-            <p style="color: #4caf50; margin-bottom: 1rem;"><i class="fas fa-sync-alt"></i> يتم تحديث القائمة تلقائياً</p>
+            <p style="color: #4caf50; margin-bottom: 1rem;"><i class="fas fa-sync-alt"></i> يتم تحديث القائمة فورياً</p>
             <div id="donorsContainer">
                 <table id="donorsTable">
                     <thead>
@@ -565,7 +593,7 @@
         </div>
         
         <div class="share-section">
-            <h3><i class="fas fa-share-alt"></i> شارك الرابط لدعم الحملة</h3>
+            <h3><i class="fas fa-share-alt"></i> شارك الحملة مع الآخرين</h3>
             <div class="share-buttons">
                 <button class="share-button" onclick="copyLink()">
                     <i class="fas fa-copy"></i> نسخ الرابط
@@ -575,12 +603,6 @@
                 </button>
                 <button class="share-button" onclick="shareOnFacebook()">
                     <i class="fab fa-facebook"></i> فيسبوك
-                </button>
-                <button class="share-button" onclick="simulateDonation()" style="background-color: var(--accent-color);">
-                    <i class="fas fa-bolt"></i> محاكاة تبرع (للاختبار)
-                </button>
-                <button class="share-button" onclick="forceSync()" style="background-color: #2196f3;">
-                    <i class="fas fa-sync"></i> تحديث القائمة
                 </button>
             </div>
         </div>
@@ -601,14 +623,107 @@
         let donors = [];
         let totalAmount = 0;
         const DONATION_GOAL = 50000;
+        let socket;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
         
         // دالة التهيئة عند تحميل الصفحة
         function init() {
+            connectWebSocket();
             loadData();
-            checkUrlParams();
             setupAmountButtons();
             setupEventListeners();
             updateGoalProgress();
+        }
+        
+        // الاتصال بخادم WebSocket
+        function connectWebSocket() {
+            try {
+                // استخدام خدمة WebSocket مجانية (لأغراض العرض)
+                // في التطبيق الحقيقي، تحتاج إلى خادم WebSocket خاص بك
+                socket = new WebSocket('wss://echo.websocket.org');
+                
+                socket.onopen = function() {
+                    console.log('تم الاتصال بالخادم');
+                    updateConnectionStatus(true);
+                    reconnectAttempts = 0;
+                    
+                    // طلب البيانات الحالية من الخادم
+                    sendMessage({ type: 'get_data' });
+                };
+                
+                socket.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleWebSocketMessage(data);
+                    } catch (e) {
+                        console.error('خطأ في معالجة البيانات:', e);
+                    }
+                };
+                
+                socket.onclose = function() {
+                    console.log('تم إغلاق الاتصال بالخادم');
+                    updateConnectionStatus(false);
+                    
+                    // محاولة إعادة الاتصال
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        setTimeout(connectWebSocket, 2000);
+                        reconnectAttempts++;
+                    }
+                };
+                
+                socket.onerror = function(error) {
+                    console.error('خطأ في الاتصال:', error);
+                    updateConnectionStatus(false);
+                };
+                
+            } catch (error) {
+                console.error('خطأ في إنشاء اتصال WebSocket:', error);
+                // وضع عدم الاتصال - استخدام localStorage فقط
+                updateConnectionStatus(false);
+            }
+        }
+        
+        // تحديث حالة الاتصال في الواجهة
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connectionStatus');
+            if (connected) {
+                statusElement.className = 'connection-status connected';
+                statusElement.innerHTML = '<i class="fas fa-wifi"></i> متصل بالخادم';
+            } else {
+                statusElement.className = 'connection-status disconnected';
+                statusElement.innerHTML = '<i class="fas fa-wifi-slash"></i> غير متصل';
+            }
+        }
+        
+        // إرسال رسالة عبر WebSocket
+        function sendMessage(message) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(message));
+            } else {
+                console.warn('الاتصال غير متاح، يتم حفظ البيانات محلياً فقط');
+                // في حالة عدم الاتصال، نعتمد على localStorage فقط
+                if (message.type === 'new_donation') {
+                    handleNewDonation(message.data);
+                }
+            }
+        }
+        
+        // معالجة الرسائل الواردة من WebSocket
+        function handleWebSocketMessage(data) {
+            switch (data.type) {
+                case 'new_donation':
+                    handleNewDonation(data.data);
+                    break;
+                case 'update_data':
+                    updateData(data.data);
+                    break;
+                case 'connected_users':
+                    updateConnectedUsers(data.count);
+                    break;
+                default:
+                    console.log('رسالة غير معروفة:', data);
+            }
         }
         
         // تحميل البيانات من localStorage
@@ -634,60 +749,47 @@
             localStorage.setItem('totalAmount', totalAmount.toString());
         }
         
-        // عند تحميل الصفحة، التحقق من وجود معلمات في الرابط
-        function checkUrlParams() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const totalParam = urlParams.get('total');
-            const donorsParam = urlParams.get('donors');
+        // تحديث كافة البيانات من الخادم
+        function updateData(data) {
+            if (data.donors && data.totalAmount) {
+                donors = data.donors;
+                totalAmount = data.totalAmount;
+                
+                saveData();
+                updateTotalAmount();
+                displayDonors();
+                updateGoalProgress();
+            }
+        }
+        
+        // تحديث عدد المستخدمين المتصلين
+        function updateConnectedUsers(count) {
+            document.getElementById('connectedUsers').textContent = count;
+        }
+        
+        // معالجة تبرع جديد
+        function handleNewDonation(donation) {
+            // تجنب التكرار
+            const donationExists = donors.some(d => 
+                d.name === donation.name && 
+                d.amount === donation.amount && 
+                d.message === donation.message &&
+                d.timestamp === donation.timestamp
+            );
             
-            if (totalParam && donorsParam) {
-                try {
-                    // دمج البيانات من الرابط مع البيانات المحلية
-                    const urlTotal = parseInt(totalParam);
-                    const urlDonors = JSON.parse(decodeURIComponent(donorsParam));
-                    
-                    let hasNewDonations = false;
-                    
-                    // دمج المتبرعين الجدد مع القائمة الحالية
-                    urlDonors.forEach(newDonor => {
-                        // إنشاء معرف فريد لكل تبرع
-                        const donorId = `${newDonor.name}-${newDonor.amount}-${newDonor.message}-${newDonor.timestamp}`;
-                        const exists = donors.some(d => {
-                            const existingId = `${d.name}-${d.amount}-${d.message}-${d.timestamp}`;
-                            return existingId === donorId;
-                        });
-                        
-                        if (!exists) {
-                            donors.push(newDonor);
-                            hasNewDonations = true;
-                            
-                            // إضافة إلى قائمة التبرعات الحديثة
-                            addToRecentDonations(newDonor);
-                        }
-                    });
-                    
-                    // تحديث الإجمالي
-                    if (urlTotal > totalAmount) {
-                        totalAmount = urlTotal;
-                        hasNewDonations = true;
-                    }
-                    
-                    if (hasNewDonations) {
-                        // حفظ البيانات المدمجة
-                        saveData();
-                        
-                        updateTotalAmount();
-                        displayDonors();
-                        updateGoalProgress();
-                        
-                        showNotification('تم تحديث قائمة المتبرعين ببيانات جديدة!');
-                    }
-                } catch (e) {
-                    console.error("Error parsing URL parameters:", e);
-                    displayEmptyState();
-                }
-            } else if (donors.length === 0) {
-                displayEmptyState();
+            if (!donationExists) {
+                donors.push(donation);
+                totalAmount += donation.amount;
+                
+                saveData();
+                updateTotalAmount();
+                updateGoalProgress();
+                
+                // عرض المتبرع الجديد مع تأثير
+                displayNewDonation(donation);
+                
+                // إضافة إلى قائمة التبرعات الحديثة
+                addToRecentDonations(donation);
             }
         }
         
@@ -739,6 +841,33 @@
             document.getElementById('donorsTable').style.display = 'table';
         }
         
+        // عرض متبرع جديد مع تأثير
+        function displayNewDonation(donation) {
+            const donorsList = document.getElementById('donorsList');
+            const row = document.createElement('tr');
+            row.className = 'new-donation';
+            row.innerHTML = `
+                <td>${donation.name}</td>
+                <td>${donation.amount.toLocaleString()} ليرة</td>
+                <td>${donation.message}</td>
+                <td>الآن</td>
+            `;
+            
+            // إدراج في الأعلى
+            if (donorsList.firstChild) {
+                donorsList.insertBefore(row, donorsList.firstChild);
+            } else {
+                donorsList.appendChild(row);
+            }
+            
+            // إخفاء حالة عدم وجود متبرعين إن كانت موجودة
+            const emptyState = document.getElementById('emptyState');
+            if (emptyState) {
+                emptyState.remove();
+                document.getElementById('donorsTable').style.display = 'table';
+            }
+        }
+        
         // تنسيق الوقت
         function formatTime(timestamp) {
             if (!timestamp) return 'الآن';
@@ -778,20 +907,30 @@
             donorsContainer.appendChild(emptyState);
         }
         
-        // تحديث الرابط ليكون قابلاً للمشاركة
-        function updateUrl() {
-            const params = new URLSearchParams();
-            params.append('total', totalAmount);
-            params.append('donors', encodeURIComponent(JSON.stringify(donors)));
+        // إضافة إلى قائمة التبرعات الحديثة
+        function addToRecentDonations(donation) {
+            const recentContainer = document.getElementById('recentDonations');
+            const donationElement = document.createElement('p');
+            donationElement.innerHTML = `<strong>${donation.name}</strong> تبرع بـ <strong>${donation.amount.toLocaleString()} ليرة</strong>`;
             
-            const newUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
-            window.history.replaceState({}, '', newUrl);
-            return newUrl;
+            recentContainer.appendChild(donationElement);
+            
+            // حذف العناصر القديمة إذا تجاوز العدد 5
+            if (recentContainer.children.length > 6) {
+                recentContainer.removeChild(recentContainer.children[1]);
+            }
+            
+            // حذف تلقائي بعد 30 ثانية
+            setTimeout(() => {
+                if (donationElement.parentNode) {
+                    donationElement.parentNode.removeChild(donationElement);
+                }
+            }, 30000);
         }
         
         // نسخ الرابط إلى الحافظة
         function copyLink() {
-            const url = updateUrl();
+            const url = window.location.href;
             navigator.clipboard.writeText(url).then(() => {
                 showNotification('تم نسخ الرابط إلى الحافظة! شاركه الآن مع أصدقائك.');
             });
@@ -810,96 +949,14 @@
         
         // مشاركة عبر واتساب
         function shareOnWhatsApp() {
-            const url = updateUrl();
+            const url = window.location.href;
             window.open(`https://wa.me/?text=${encodeURIComponent('انضم إلى حملة تبرعات إصلاح طرق قرية الشغور: ' + url)}`, '_blank');
         }
         
         // مشاركة عبر فيسبوك
         function shareOnFacebook() {
-            const url = updateUrl();
+            const url = window.location.href;
             window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`, '_blank');
-        }
-        
-        // إضافة تبرع جديد
-        function addDonation(name, amount, message) {
-            const newDonor = {
-                name: name,
-                amount: amount,
-                message: message,
-                timestamp: new Date().getTime()
-            };
-            
-            donors.push(newDonor);
-            totalAmount += amount;
-            
-            saveData();
-            updateTotalAmount();
-            updateGoalProgress();
-            
-            // إضافة الصف مع تأثير التمييز
-            const donorsList = document.getElementById('donorsList');
-            const row = document.createElement('tr');
-            row.className = 'new-donation';
-            row.innerHTML = `
-                <td>${newDonor.name}</td>
-                <td>${newDonor.amount.toLocaleString()} ليرة</td>
-                <td>${newDonor.message}</td>
-                <td>الآن</td>
-            `;
-            
-            // إدراج في الأعلى
-            if (donorsList.firstChild) {
-                donorsList.insertBefore(row, donorsList.firstChild);
-            } else {
-                donorsList.appendChild(row);
-            }
-            
-            // إضافة إلى قائمة التبرعات الحديثة
-            addToRecentDonations(newDonor);
-            
-            // إخفاء حالة عدم وجود متبرعين إن كانت موجودة
-            const emptyState = document.getElementById('emptyState');
-            if (emptyState) {
-                emptyState.remove();
-                document.getElementById('donorsTable').style.display = 'table';
-            }
-            
-            // تحديث الرابط بالمعلومات الجديدة
-            updateUrl();
-        }
-        
-        // إضافة إلى قائمة التبرعات الحديثة
-        function addToRecentDonations(donor) {
-            const recentContainer = document.getElementById('recentDonations');
-            const donationElement = document.createElement('p');
-            donationElement.innerHTML = `<strong>${donor.name}</strong> تبرع بـ <strong>${donor.amount.toLocaleString()} ليرة</strong>`;
-            
-            recentContainer.appendChild(donationElement);
-            
-            // حذف العناصر القديمة إذا تجاوز العدد 5
-            if (recentContainer.children.length > 6) {
-                recentContainer.removeChild(recentContainer.children[1]);
-            }
-            
-            // حذف تلقائي بعد 30 ثانية
-            setTimeout(() => {
-                if (donationElement.parentNode) {
-                    donationElement.parentNode.removeChild(donationElement);
-                }
-            }, 30000);
-        }
-        
-        // محاكاة تبرع (لأغراض الاختبار والعرض)
-        function simulateDonation() {
-            const names = ["أحمد محمد", "فاطمة الزهراء", "محمد علي", "سارة عبد الله", "يوسف إبراهيم", "لمياء حسن", "عمر خالد", "هدى محمود"];
-            const messages = ["بارك الله فيكم", "أسأل الله القبول", "اللهم تقبل منا", "جزيتم خيراً", "مبارك هذا العمل"];
-            
-            const randomName = names[Math.floor(Math.random() * names.length)];
-            const randomAmount = [100, 500, 1000, 5000, 10000][Math.floor(Math.random() * 5)];
-            const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-            
-            addDonation(randomName, randomAmount, randomMessage);
-            showNotification(`تم محاكاة تبرع من ${randomName}`);
         }
         
         // إعداد أزرار اختيار المبلغ
@@ -919,12 +976,6 @@
             });
         }
         
-        // إعادة المزامنة يدوياً
-        function forceSync() {
-            checkUrlParams();
-            showNotification('جارٍ تحديث قائمة المتبرعين...');
-        }
-        
         // إعداد مستمعي الأحداث
         function setupEventListeners() {
             // معالجة تقديم النموذج
@@ -936,7 +987,21 @@
                 const message = document.getElementById('message').value || 'بارك الله فيكم';
                 
                 if (amount > 0) {
-                    addDonation(name, amount, message);
+                    const newDonation = {
+                        name: name,
+                        amount: amount,
+                        message: message,
+                        timestamp: new Date().getTime()
+                    };
+                    
+                    // إرسال التبرع الجديد إلى الخادم
+                    sendMessage({
+                        type: 'new_donation',
+                        data: newDonation
+                    });
+                    
+                    // معالجة التبرع محلياً
+                    handleNewDonation(newDonation);
                     
                     // إظهار رسالة الشكر
                     document.getElementById('thankYouMessage').style.display = 'block';
